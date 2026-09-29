@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Secrets — never commit; copy .env.example instead
+.env
+.env.*
+!.env.example
+
+# Database exports
+backups/
+
+# OS / editor / logs
+.DS_Store
+*.log
