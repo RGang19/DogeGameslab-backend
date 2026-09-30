@@ -106,3 +106,5 @@ setupRoutes("");
 setupRoutes("/studio-backend/api");
 
 app.use(errorHandler);
+
+export default app;
