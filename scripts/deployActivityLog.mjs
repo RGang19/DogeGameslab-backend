@@ -21,7 +21,8 @@ const input = {
   sources: { "DogeGameActivityLog.sol": { content: source } },
   settings: {
     optimizer: { enabled: true, runs: 200 },
-    ...(network === "dogeos" ? { evmVersion: "prague" } : {}),
+    // DogeOS requires Prague; 0G stays on Cancun so the bytecode runs on 0G mainnet.
+    evmVersion: network === "dogeos" ? "prague" : "cancun",
     outputSelection: { "*": { "*": ["abi", "evm.bytecode.object"] } }
   }
 };
