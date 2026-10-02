@@ -1,5 +1,7 @@
+// Must stay the first import: modules imported below read process.env while
+// they load (e.g. MONGODB_COLLECTION), so .env has to be applied before them.
+import "dotenv/config";
 import cors from "cors";
-import dotenv from "dotenv";
 import express from "express";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -19,7 +21,6 @@ import { getZeroGConfig } from "./services/zeroGService.js";
 import { getZeroGStorageConfig } from "./services/zeroGStorage.js";
 import { requestIp, trackReferralClick } from "./services/referralService.js";
 
-dotenv.config();
 
 export const app = express();
 

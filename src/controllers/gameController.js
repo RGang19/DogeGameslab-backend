@@ -16,7 +16,11 @@ import { generateAndStoreGameThumbnail } from "../services/thumbnailService.js";
 import { logActivity } from "../services/activityService.js";
 import { putBufferOnZeroG } from "../services/zeroGStorage.js";
 import { awardFirstGameBonus, recordCreatorGamePublished } from "../services/pointsService.js";
-import { notifyFollowersOfPublish } from "../services/socialService.js";
+import {
+  getCommentCountsForGames,
+  getEngagementCountsForGames,
+  notifyFollowersOfPublish
+} from "../services/socialService.js";
 import { assertGenerationAccess, generationAccessMetadata, fetchGenerationQuotaForAuth } from "../services/generationAccessService.js";
 import { consumeGenerationQuota } from "../services/generationQuotaService.js";
 import { recordPaymentReceipt, recordGenerationProvenance, recordPublishedSnapshot } from "../services/zeroGProvenanceService.js";
@@ -97,6 +101,22 @@ export async function listGames(request, response, next) {
       ids,
       publishedOnly: !creatorId
     });
+    // Card strip counts: likes, shares, comments and remixes per game, fetched
+    // with one grouped query each rather than one request per card.
+    const gameIds = games.map((game) => game.id).filter(Boolean);
+    const [engagement, commentCounts] = await Promise.all([
+      getEngagementCountsForGames(gameIds),
+      getCommentCountsForGames(gameIds)
+    ]);
+    for (const game of games) {
+      const counts = engagement.byGame[game.id] ?? { likes: 0, shares: 0, remixes: 0 };
+      game.socialCounts = {
+        likes: counts.likes,
+        shares: counts.shares,
+        comments: commentCounts[game.id] ?? 0,
+        remixes: counts.remixes
+      };
+    }
     const forReels = String(request.query.forReels ?? "").toLowerCase();
     if (forReels === "1" || forReels === "true") {
       for (let i = games.length - 1; i > 0; i -= 1) {

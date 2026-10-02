@@ -9,15 +9,17 @@ import {
 import { attributeNewUser, requestIp } from "../services/referralService.js";
 import { logActivityOnChain, ACTIVITY } from "../services/zeroGActivityLog.js";
 
-const evmAddress = z.string().regex(/^0x[a-fA-F0-9]{40}$/);
+// DogeOS (0x…) or Dogecoin (D…/n…) address; full validation happens in authService.
+const walletAddress = z.string().regex(/^(0x[a-fA-F0-9]{40}|[Dn][1-9A-HJ-NP-Za-km-z]{25,34})$/);
 
-const challengeSchema = z.object({ address: evmAddress }).strict();
+const challengeSchema = z.object({ address: walletAddress }).strict();
 
 const tokenSchema = z
   .object({
-    address: evmAddress,
+    address: walletAddress,
     message: z.string().min(20).max(2000),
-    signature: z.string().regex(/^0x[a-fA-F0-9]+$/),
+    // EVM: 0x-hex personal_sign. Dogecoin: base64 compact signature.
+    signature: z.string().regex(/^(0x[a-fA-F0-9]+|[A-Za-z0-9+/]{86,88}={0,2})$/),
   })
   .strict();
 
@@ -75,6 +77,7 @@ authRouter.post("/token", async (request, response, next) => {
       token,
       userId,
       evmWalletAddress: identity.evmWalletAddress,
+      dogecoinAddress: identity.dogecoinAddress,
       identityAliases: identity.identityAliases,
       expirationDays: getAuthConfig().expirationDays
     });

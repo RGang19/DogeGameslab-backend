@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { getAddress, verifyMessage } from "ethers";
+import { describeDogecoinSignature, dogecoinAddressVersion, isDogecoinAddress, recoverDogecoinAddress } from "./dogecoinSignature.js";
 import jwt from "jsonwebtoken";
 
 // JWT configuration comes from the environment:
@@ -49,12 +50,26 @@ function authError(message, status = 401, code) {
   return error;
 }
 
-function normalizeEvmAddress(value) {
+/**
+ * Accepts a DogeOS (EVM 0x…) address or a Dogecoin address (D…, e.g. from the
+ * MyDoge extension, which only exposes a Dogecoin account). EVM addresses are
+ * checksummed; Dogecoin addresses are case-sensitive and kept as-is.
+ */
+function normalizeWalletAddress(value) {
+  const raw = String(value || "").trim();
+  if (isDogecoinAddress(raw)) return raw;
   try {
-    return getAddress(String(value || "").trim());
+    return getAddress(raw);
   } catch {
-    throw authError("A valid DogeOS (EVM) wallet address is required", 400, "EVM_WALLET_REQUIRED");
+    throw authError("A valid DogeOS (0x…) or Dogecoin (D…) wallet address is required", 400, "WALLET_REQUIRED");
   }
+}
+
+const isEvmAddress = (value) => /^0x[a-fA-F0-9]{40}$/.test(String(value || ""));
+
+/** The account key: lowercase for EVM, exact for Dogecoin. */
+function accountKey(address) {
+  return isEvmAddress(address) ? address.toLowerCase() : address;
 }
 
 function challengeMac(fields) {
@@ -72,7 +87,7 @@ function readField(message, label) {
  * without shared challenge storage.
  */
 export function createSignInChallenge({ address, domain }) {
-  const normalizedAddress = normalizeEvmAddress(address);
+  const normalizedAddress = normalizeWalletAddress(address);
   const host = String(domain || "").trim() || "dogegamelab";
   const chainId = getDogeOSChainId();
   const nonce = randomBytes(16).toString("hex");
@@ -104,7 +119,7 @@ export function createSignInChallenge({ address, domain }) {
 
 /** Verifies a signed sign-in challenge and returns the wallet identity. */
 export function verifySignInSignature({ address, message, signature }) {
-  const normalizedAddress = normalizeEvmAddress(address);
+  const normalizedAddress = normalizeWalletAddress(address);
   const fields = {
     address: readField(message, "Address"),
     domain: readField(message, "Domain"),
@@ -138,20 +153,32 @@ export function verifySignInSignature({ address, message, signature }) {
     throw authError("Sign-in message does not match this wallet.", 401);
   }
 
-  let recovered;
-  try {
-    recovered = getAddress(verifyMessage(message, signature));
-  } catch {
-    throw authError("Could not verify the wallet signature.", 401);
+  let recovered = null;
+  if (isEvmAddress(normalizedAddress)) {
+    try {
+      recovered = getAddress(verifyMessage(message, signature));
+    } catch {
+      throw authError("Could not verify the wallet signature.", 401);
+    }
+  } else {
+    recovered = recoverDogecoinAddress(message, signature, dogecoinAddressVersion(normalizedAddress), normalizedAddress);
+    if (recovered !== normalizedAddress) {
+      console.warn("[auth] Dogecoin signature did not verify", {
+        address: normalizedAddress,
+        recovered,
+        signature: describeDogecoinSignature(signature)
+      });
+    }
   }
-  if (recovered !== normalizedAddress) {
+  if (!recovered || recovered !== normalizedAddress) {
     throw authError("Wallet signature does not match the address.", 401);
   }
 
-  const walletAddress = normalizedAddress.toLowerCase();
+  const walletAddress = accountKey(normalizedAddress);
   return {
     userId: walletAddress,
-    evmWalletAddress: walletAddress,
+    evmWalletAddress: isEvmAddress(walletAddress) ? walletAddress : null,
+    dogecoinAddress: isEvmAddress(walletAddress) ? null : walletAddress,
     identityAliases: [walletAddress]
   };
 }
@@ -170,11 +197,14 @@ const EVM_ADDRESS = /^0x[a-fA-F0-9]{40}$/;
  */
 export function enrichAuthPayload(payload = {}) {
   const wallet = normalizeAddress(payload.evmWalletAddress ?? payload.userId);
-  const walletAddress = wallet && EVM_ADDRESS.test(wallet) ? wallet : null;
+  const evmWalletAddress = wallet && EVM_ADDRESS.test(wallet) ? wallet : null;
+  const dogecoinAddress = !evmWalletAddress && isDogecoinAddress(payload.userId) ? payload.userId : null;
+  const walletAddress = evmWalletAddress ?? dogecoinAddress;
   return {
     ...payload,
     userId: walletAddress ?? payload.userId,
-    evmWalletAddress: walletAddress,
+    evmWalletAddress,
+    dogecoinAddress,
     identityAliases: walletAddress ? [walletAddress] : []
   };
 }
@@ -182,7 +212,8 @@ export function enrichAuthPayload(payload = {}) {
 /** Rejects tokens that are not bound to a wallet (e.g. pre-DogeOS sessions). */
 function requireWalletIdentity(payload) {
   const auth = enrichAuthPayload(payload);
-  if (!auth.evmWalletAddress || auth.userId !== auth.evmWalletAddress) {
+  const walletAddress = auth.evmWalletAddress ?? auth.dogecoinAddress;
+  if (!walletAddress || auth.userId !== walletAddress) {
     throw authError("Sign in again with your DogeOS wallet.", 401, "WALLET_SIGN_IN_REQUIRED");
   }
   return auth;

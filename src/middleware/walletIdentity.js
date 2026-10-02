@@ -32,7 +32,7 @@ export function optionalWalletActor(field = "userId") {
 export const ownWalletParam = [
   requireAuth,
   (request, response, next) => {
-    if (String(request.params.userId ?? "").toLowerCase() !== request.auth.userId) {
+    if (String(request.params.userId ?? "").toLowerCase() !== request.auth.userId.toLowerCase()) {
       response.status(403).json({ error: "You can only access your own wallet's data." });
       return;
     }
