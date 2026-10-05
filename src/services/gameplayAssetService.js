@@ -5,6 +5,7 @@ import { isObjectStorageConfigured, uploadPublicObject } from "./objectStorageSe
 import { uploadThumbnail } from "./thumbnailService.js";
 import { putBufferOnZeroG } from "./zeroGStorage.js";
 import { getCodeAssetConfig, designAssetSet, drawAssetSet } from "./codeAssetService.js";
+import { DOGE_HERO_SPRITE_RULE, DOGECOIN_ART_RULE } from "./dogeHeroService.js";
 
 // In-game artwork (NOT cover art). Produces a { role -> url } manifest that the
 // generated game's runtime (DOGEGAME_RUNTIME.drawAsset) loads and draws. Character
@@ -49,7 +50,7 @@ export function planGameplayAssets(game) {
   const spec = String(
     game.generation?.prompt || game.customization?.prompt || game.gameplay?.mechanic || ""
   ).slice(0, 4000);
-  const shared = `Game: ${title}. ${spec}. Original production-quality in-game artwork, not cover art. No logos, no title text, no watermark, no frame, no UI.`;
+  const shared = `Game: ${title}. ${spec}. Original production-quality in-game artwork, not cover art. No logos, no title text, no watermark, no frame, no UI. If coins or money appear, ${DOGECOIN_ART_RULE}.`;
   const solidBg =
     "CRITICAL: isolated on a completely plain, uniform, flat SINGLE-COLOR background — no scenery, no floor, no ground, no shadow, no gradient — so it can be cut out cleanly.";
 
@@ -58,7 +59,7 @@ export function planGameplayAssets(game) {
       role: "player",
       transparent: true,
       size: "1024x1024",
-      prompt: `${shared} The main playable character, single figure, clear full-body action pose, centered, readable silhouette, game-ready character art. ${solidBg}`,
+      prompt: `${shared} The main playable character, single figure, clear full-body action pose, centered, readable silhouette, game-ready character art. ${DOGE_HERO_SPRITE_RULE} ${solidBg}`,
     },
     {
       role: "environment",

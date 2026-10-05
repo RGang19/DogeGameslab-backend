@@ -3,6 +3,7 @@ import { generateImageAsset, getModelsForTier } from "./zeroGService.js";
 import { uploadPublicObject } from "./objectStorageService.js";
 import { putBufferOnZeroG } from "./zeroGStorage.js";
 import { getGameCollection } from "./databaseService.js";
+import { DOGECOIN_ART_RULE } from "./dogeHeroService.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Sprite asset pipeline
@@ -102,7 +103,7 @@ function themeHint(game) {
 export function buildSpriteManifest(game) {
   const { title, prompt } = themeHint(game);
   const category = String(game?.category || game?.gameplay?.mechanic || "arcade").toLowerCase();
-  const base = `Match the game's theme: ${title}. ${prompt}`;
+  const base = `Match the game's theme: ${title}. ${prompt} If coins or money appear, ${DOGECOIN_ART_RULE}.`;
 
   const objectsByCategory = {
     runner: [["coin", "a shiny collectible coin token"], ["obstacle", "a hazard/obstacle to dodge"]],

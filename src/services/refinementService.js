@@ -1,6 +1,7 @@
 import { getReferenceGame } from "../data/referenceGames.js";
 import { runtimeSmokeTest } from "./gameSmokeTest.js";
 import { callZeroGChat, zeroGModels } from "./zeroGService.js";
+import { DOGECOIN_CODE_RULE } from "./dogeHeroService.js";
 import vm from "node:vm";
 
 const VALIDATED_RUNTIME_SHELL = `
@@ -101,6 +102,9 @@ function buildPromptBundle({ gamePackage, request, plan, premium = false, sound 
       "The game MUST be fully playable on a touch phone with no keyboard: handle touchstart/touchend (and pointer events) on the canvas so swipes steer/move and taps perform the main action; never make a physical key the ONLY way to play.",
       "Restart MUST fully reset ALL game state to a fresh start (score, player, entities, timers, spawn queues, flags, the game-over/win state) and MUST trigger ONLY on an explicit tap/click/keypress after game over. The game must NEVER auto-restart, loop back, or reset itself on its own — a game that keeps restarting by itself is a critical failure.",
       "Every control, button, and mechanic must be fully wired and actually work — no dead buttons, no half-implemented inputs. The game must not throw any uncaught runtime error while loading or playing.",
+      "FAIR, BEATABLE PHYSICS: every obstacle must be clearable with normal play. For jump/dodge games, derive the numbers — peak jump height = v²/(2g) must be at least 1.5× the height/threshold needed to clear an obstacle, and the time spent above that threshold must be at least 0.35s, even at top speed. Never set a clearance threshold at or near the jump's peak. Spawn gaps must leave time to land and react before the next obstacle.",
+      "TEXT AND LAYOUT MUST LINE UP: draw every label from the SAME x/y/width/height variables as the shape it belongs to — a button's text goes at (x + w/2, y + h/2) with textAlign 'center' and textBaseline 'middle'. Never position a shape with one unit (e.g. Math.min(W,H)) and its text with another (e.g. H), because the frame is tall and narrow and they drift apart. Text must fit its container: measure it with ctx.measureText and shrink the font until it is narrower than the container minus padding. No text may overlap other text, spill outside its button or panel, or be clipped by the screen edge. Set textAlign and textBaseline explicitly before each group of text — never rely on values left over from earlier drawing.",
+      DOGECOIN_CODE_RULE,
       "Import the game package with: import { gamePackage } from \"./gamePackage.js\";",
       "Import styles with: import \"./styles.css\";",
       "Do not use export statements anywhere in the module.",
@@ -123,6 +127,9 @@ function buildPromptBundle({ gamePackage, request, plan, premium = false, sound 
       "- Nothing reads a property or index of a value that can be undefined (e.g. board[r][c] before board[r] exists, or entity.x when entity is undefined) — this is the most common crash.",
       "- Restart fully resets ALL state (score, player, entities, timers, spawn queues, flags, the game-over/win state) and triggers ONLY on explicit input — it must never auto-restart or loop by itself.",
       "- No uncaught error can occur on load or the first frame; every variable and function used is defined before use.",
+      "- Physics are fair: compute your jump peak (v²/2g) and confirm it comfortably clears every obstacle threshold with a reaction window of at least 0.35s; fix the numbers if not.",
+      "- Every label sits inside its own button or panel: its position is computed from that shape's x/y/w/h (not from a different unit), it is centred, it fits the width, and nothing overlaps or is clipped on a tall narrow phone screen.",
+      "- Any coins or currency are Dogecoin (Ð); there is no Bitcoin, ₿, other crypto, or '$' for coins.",
       "- Win/lose conditions are reachable and actually fire.",
       "STRICT RULES FOR THIS CHECK (it must only ever IMPROVE the game, never degrade it): This is a precise fix pass, NOT a rewrite. Change ONLY lines that are genuinely broken and leave all correct, working code exactly as written. Do NOT add try/catch, redundant null-guards, or defensive boilerplate 'just in case'. Do NOT remove, simplify, or water down any gameplay, mechanics, feature, or the visual juice/polish above. If everything already passes, return the module unchanged."
     ].join("\n"),

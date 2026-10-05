@@ -39,7 +39,7 @@ function networkConfigs() {
       name: "0G",
       enabled: process.env.ZERO_G_ACTIVITY_ENABLED !== "false",
       contract: process.env.ZERO_G_ACTIVITY_CONTRACT?.trim(),
-      rpc: process.env.ZERO_G_STORAGE_EVM_RPC || process.env.ZERO_G_PAYMENT_RPC_URL || "https://evmrpc.0g.ai",
+      rpc: process.env.ZERO_G_STORAGE_EVM_RPC || "https://evmrpc.0g.ai",
       privateKey: process.env.ZERO_G_STORAGE_PRIVATE_KEY || process.env.ZERO_G_PRIVATE_KEY
     },
     {

@@ -1,9 +1,15 @@
 import { getDatabase, getGameCollection } from "./databaseService.js";
 import sharp from "sharp";
 import { isObjectStorageConfigured, uploadPublicObject } from "./objectStorageService.js";
-import { generateImageAsset } from "./zeroGService.js";
+import { callZeroGChat, generateImageAsset, getModelsForTier } from "./zeroGService.js";
+import opentype from "opentype.js";
+import { readFileSync } from "node:fs";
 import { putBufferOnZeroG } from "./zeroGStorage.js";
 import { logActivityOnChain, ACTIVITY } from "./zeroGActivityLog.js";
+import { DOGECOIN_ART_RULE } from "./dogeHeroService.js";
+import { fileURLToPath } from "node:url";
+
+const COVER_FONT_FILE = fileURLToPath(new URL("../../assets/fonts/LuckiestGuy-Regular.ttf", import.meta.url));
 
 const COLLECTION_NAME = "thumbnails";
 const THUMBNAIL_WIDTH = 384;
@@ -132,19 +138,158 @@ async function renderFallbackCoverWebp(game) {
   return sharp(Buffer.from(svg)).webp({ quality: 90 }).toBuffer();
 }
 
-export async function generateAndStoreGameThumbnail(game) {
-  if (!game?.id) throw new Error("game.id is required for thumbnail generation");
+// The title as it appears on the cover: the real game title, cleaned of
+// characters the display font can't draw.
+function coverTitleText(title) {
+  const cleaned = String(title || "").replace(/[^\p{L}\p{N}\s:!?&'.-]/gu, " ").replace(/\s+/g, " ").trim();
+  return (cleaned || "GAME").toUpperCase().slice(0, 48);
+}
 
-  const prompt = [
-    `${game.title} game cover art`,
-    game.generation?.prompt || game.prompt || game.customization?.prompt,
+let coverFont = null;
+function loadCoverFont() {
+  if (!coverFont) {
+    const file = readFileSync(COVER_FONT_FILE);
+    coverFont = opentype.parse(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength));
+  }
+  return coverFont;
+}
+
+// Splits the title into 1-3 lines and picks the largest font size at which
+// every line fits the box.
+function layoutCoverTitle(font, text, maxWidth, maxHeight) {
+  const words = text.split(" ");
+  const widthAt = (line, size) => font.getAdvanceWidth(line, size);
+  let best = null;
+  for (let lineCount = 1; lineCount <= Math.min(3, words.length); lineCount += 1) {
+    // Balance the lines by character count.
+    const target = text.length / lineCount;
+    const lines = [];
+    let current = "";
+    for (const word of words) {
+      const next = current ? `${current} ${word}` : word;
+      if (current && next.length > target + 2 && lines.length < lineCount - 1) {
+        lines.push(current);
+        current = word;
+      } else {
+        current = next;
+      }
+    }
+    lines.push(current);
+    const widest = Math.max(...lines.map((line) => widthAt(line, 100)));
+    const size = Math.min(64, (maxWidth / widest) * 100, maxHeight / (lines.length * 1.04));
+    if (!best || size > best.size) best = { lines, size };
+  }
+  return best;
+}
+
+// Draws the game title on top of the cover art. Image models misspell text, so
+// the art is generated WITHOUT lettering and the title is drawn here from the
+// real string. The letters are converted to vector outlines from the bundled
+// font, so the result is identical on every server (no installed fonts needed).
+async function overlayCoverTitle(coverBuffer, title) {
+  const font = loadCoverFont();
+  const text = coverTitleText(title);
+  const marginX = 24;
+  const top = 30;
+  const { lines, size } = layoutCoverTitle(font, text, THUMBNAIL_WIDTH - marginX * 2, 168);
+  const lineHeight = size * 1.04;
+  const paths = lines
+    .map((line, index) => {
+      const x = (THUMBNAIL_WIDTH - font.getAdvanceWidth(line, size)) / 2;
+      const baseline = top + size * 0.86 + index * lineHeight;
+      return font.getPath(line, x, baseline, size).toPathData(2);
+    })
+    .join(" ");
+  const stroke = Math.max(5, size * 0.2);
+  const blockBottom = top + lines.length * lineHeight + 26;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${THUMBNAIL_WIDTH}" height="${THUMBNAIL_HEIGHT}">
+    <defs>
+      <linearGradient id="shade" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#0b1026" stop-opacity="0.55"/>
+        <stop offset="1" stop-color="#0b1026" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#ffffff"/>
+        <stop offset="1" stop-color="#ffe9a8"/>
+      </linearGradient>
+    </defs>
+    <rect width="${THUMBNAIL_WIDTH}" height="${Math.round(blockBottom + 40)}" fill="url(#shade)"/>
+    <path d="${paths}" transform="translate(0 4)" fill="#000000" opacity="0.45" stroke="#000000" stroke-width="${stroke}" stroke-linejoin="round"/>
+    <path d="${paths}" fill="none" stroke="#14213d" stroke-width="${stroke}" stroke-linejoin="round"/>
+    <path d="${paths}" fill="url(#fill)"/>
+  </svg>`;
+  return sharp(coverBuffer)
+    .composite([{ input: Buffer.from(svg), left: 0, top: 0 }])
+    .webp({ quality: 88 })
+    .toBuffer();
+}
+
+// What the cover picture should show: a short scene description built from the
+// game, phrased positively. The title and words such as "cover" or "Ð" are left
+// out because they make image models paint lettering and coin symbols.
+function coverArtPrompt(game) {
+  const source = String(game.generation?.prompt || game.prompt || game.customization?.prompt || "")
+    .replace(/Ð\s*coins?/gi, "gold dog-face coins")
+    .replace(/[Ð₿$]/g, "")
+    .replace(/\b(dogecoin|bitcoin|crypto\w*)\b/gi, "gold coin")
+    .replace(/\b(HUD|UI|button\w*|menu\w*|score\w*|title\w*|text|label\w*|swipe\w*|tap\w*|arrow keys?)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 420);
+  return [
+    "A single wordless illustration of one exciting moment from a video game, shown as a scene, like a painting",
+    source,
     game.gameplay?.mechanic,
     game.visuals?.mood,
     (game.visuals?.colors ?? []).slice(0, 3).join(" "),
-    `the bold uppercase title "${coverTitle(game.title)}" spelled exactly, in a clean large display font across the top like a game cover`,
-    "polished colorful game cover art, clear gameplay subject, crisp legible lettering",
-    "vertical 2:3 portrait composition, keep the title and important subjects inside safe margins"
+    "polished colorful digital illustration, one clear main character in action in the lower two thirds",
+    "the top quarter of the picture is calm open sky or plain background",
+    DOGECOIN_ART_RULE,
+    "pure artwork only: a clean picture with blank unmarked surfaces, vertical 2:3 portrait"
   ].filter(Boolean).join(", ");
+}
+
+// Asks the vision model whether the art came out clean. Image models sometimes
+// paint lettering, a Bitcoin symbol or interface buttons no matter the prompt;
+// a flagged picture is regenerated. Returns the number of problems (0 = clean),
+// or 0 when the check itself can't run, so a cover is never blocked by it.
+async function countCoverArtProblems(webpBuffer) {
+  try {
+    const response = await callZeroGChat({
+      model: getModelsForTier(1).vision,
+      maxTokens: 200,
+      temperature: 0,
+      retries: 1,
+      timeoutMs: 45000,
+      messages: [{
+        role: "user",
+        content: [
+          {
+            type: "text",
+            // Asking what it can READ is far more reliable than a yes/no question.
+            text: 'Inspect this picture carefully. Reply with ONLY JSON: {"words": "<every word or letter sequence you can actually read in the picture, exactly as written, or empty string if there is no writing>", "coin_symbols": "<describe what is embossed on the coins: e.g. dog face, letter B, dollar sign, plain, or none if no coins>", "interface": "<list any on-screen game controls such as arrow buttons, or none>"}'
+          },
+          { type: "image_url", image_url: { url: `data:image/webp;base64,${webpBuffer.toString("base64")}` } }
+        ]
+      }]
+    });
+    const seen = JSON.parse(response.content.match(/\{[\s\S]*\}/)?.[0] ?? "{}");
+    const hasWriting = String(seen.words ?? "").replace(/[^\p{L}\p{N}]/gu, "").length >= 2;
+    const wrongCoin = /\bB\b|bitcoin|₿|dollar|\$|ethereum|\bbtc\b/i.test(String(seen.coin_symbols ?? ""));
+    const hasInterface = !/^\s*(none|no|n\/a)?\s*$/i.test(String(seen.interface ?? ""));
+    return [hasWriting, wrongCoin, hasInterface].filter(Boolean).length;
+  } catch (error) {
+    console.warn("Cover art check skipped", { message: error.message });
+    return 0;
+  }
+}
+
+const COVER_ART_ATTEMPTS = Math.max(1, Number(process.env.COVER_ART_ATTEMPTS) || 3);
+
+export async function generateAndStoreGameThumbnail(game) {
+  if (!game?.id) throw new Error("game.id is required for thumbnail generation");
+
+  const prompt = coverArtPrompt(game);
 
   // Request a native 2:3 portrait composition, then normalize the stored file
   // to the exact dimensions used by mobile and tablet game cards. generateImageAsset
@@ -156,28 +301,43 @@ export async function generateAndStoreGameThumbnail(game) {
   let contentType = "image/webp";
   let usedFallback = false;
   try {
-    let generated;
+    // Generate the art, check it, and regenerate if it has lettering, a Bitcoin
+    // symbol or interface buttons. The cleanest attempt is kept.
+    let best = null;
+    for (let attempt = 1; attempt <= COVER_ART_ATTEMPTS; attempt += 1) {
+      let generated;
+      try {
+        generated = await generateImageAsset({ prompt, size: "1024x1536" });
+      } catch (error) {
+        if (best) break;
+        generated = await generateImageAsset({ prompt });
+      }
+      const image = generated.images?.[0];
+      let source;
+      if (image?.b64_json) {
+        source = Buffer.from(image.b64_json, "base64");
+      } else if (image?.url) {
+        ({ buffer: source } = await downloadImage(image.url));
+      } else {
+        throw new Error("Image agent returned no image");
+      }
+      const art = await sharp(source)
+        .resize(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, { fit: "cover", position: "centre" })
+        .webp({ quality: 88 })
+        .toBuffer();
+      const problems = await countCoverArtProblems(art);
+      if (!best || problems < best.problems) best = { art, problems, generated };
+      if (problems === 0) break;
+      console.warn("Cover art had unwanted content; regenerating", { gameId: game.id, attempt, problems });
+    }
+    result = best.generated;
+    buffer = best.art;
     try {
-      generated = await generateImageAsset({ prompt, size: "1024x1536" });
-    } catch {
-      generated = await generateImageAsset({ prompt });
+      buffer = await overlayCoverTitle(buffer, game.title);
+    } catch (error) {
+      // The art alone is still a valid cover; the card shows the title under it.
+      console.warn("Cover title overlay failed; keeping the art without a title", { gameId: game.id, message: error.message });
     }
-    result = generated;
-    const image = generated.images?.[0];
-    let source;
-    let sourceType = "image/png";
-    if (image?.b64_json) {
-      source = Buffer.from(image.b64_json, "base64");
-    } else if (image?.url) {
-      ({ buffer: source, contentType: sourceType } = await downloadImage(image.url));
-    } else {
-      throw new Error("Image agent returned no image");
-    }
-    void sourceType;
-    buffer = await sharp(source)
-      .resize(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, { fit: "cover", position: "centre" })
-      .webp({ quality: 88 })
-      .toBuffer();
   } catch (error) {
     console.warn("Thumbnail image model unavailable; rendering webp fallback cover", { gameId: game.id, message: error.message });
     buffer = await renderFallbackCoverWebp(game);

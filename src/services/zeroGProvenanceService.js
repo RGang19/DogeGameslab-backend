@@ -15,24 +15,6 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-// 1) Payment receipts — who paid, how much, in what, for which game.
-export function recordPaymentReceipt({ creatorId, gameId, tier, access }) {
-  if (!access || access.free) return;
-  const ref = access.paymentTxHash ?? Date.now();
-  const method = access.paymentMethod ?? "0g";
-  record("payment-receipt", `${gameId ?? "generation"}-${ref}`, {
-    creatorId: creatorId ?? null,
-    gameId: gameId ?? null,
-    tier: tier ?? access.tier ?? null,
-    kind: access.editing ? "edit" : "generation",
-    method,
-    currency: access.currency ?? null,
-    amount: access.amount ?? null,
-    paymentTxHash: access.paymentTxHash ?? null,
-    recordedAt: nowIso()
-  }, { creatorId: creatorId ?? null, gameId: gameId ?? null });
-}
-
 // 2) Game version history — every build/edit that produced code.
 export function recordGameVersion({ game, refinement, kind }) {
   if (!game?.id || !refinement?.generatedCode) return;

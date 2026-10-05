@@ -1,45 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  FREE_HYBRID_LIMIT,
-  FREE_PRO_LIMIT,
-  FREE_ULTRA_LIMIT,
-  PRO_FIRST_BUNDLE,
-  PRO_RENEWAL_BUNDLE,
-  ULTRA_BUNDLE,
-  summarizeQuota
-} from "../src/services/generationQuotaService.js";
+import { FAST_LIMIT, PREMIUM_LIMIT, summarizeQuota } from "../src/services/generationQuotaService.js";
+import { getEditingModelsForTier, getModelsForTier, normalizeTier } from "../src/services/zeroGService.js";
 
-test("free tier limits match product defaults", () => {
-  assert.equal(FREE_HYBRID_LIMIT, 10);
-  assert.equal(FREE_PRO_LIMIT, 1);
-  assert.equal(FREE_ULTRA_LIMIT, 1);
+test("free limits match product defaults", () => {
+  assert.equal(FAST_LIMIT, 10);
+  assert.equal(PREMIUM_LIMIT, 1);
 });
 
-test("subscription bundles match product defaults", () => {
-  assert.deepEqual(PRO_FIRST_BUNDLE, { pro: 15, ultra: 10, hybrid: 0 });
-  assert.deepEqual(PRO_RENEWAL_BUNDLE, { pro: 20, ultra: 0, hybrid: 10 });
-  assert.deepEqual(ULTRA_BUNDLE, { pro: 0, ultra: 20, hybrid: 10 });
+test("summarizeQuota reports what is left on each tier", () => {
+  const summary = summarizeQuota({ fastUsed: 3, premiumUsed: 4 });
+  assert.deepEqual(summary.used, { fast: 3, premium: 4 });
+  assert.deepEqual(summary.remaining, { fast: 7, premium: 0 });
 });
 
-test("summarizeQuota exposes remaining free and paid credits", () => {
-  const summary = summarizeQuota(
-    {
-      hybridUsed: 3,
-      proUsed: 1,
-      ultraUsed: 0,
-      hybridFreeRemaining: 7,
-      proFreeRemaining: 0,
-      ultraFreeRemaining: 1
-    },
-    {
-      proCredits: 15,
-      ultraCredits: 10,
-      hybridCredits: 0
-    }
-  );
-  assert.equal(summary.remaining.hybridFree, 7);
-  assert.equal(summary.remaining.proFree, 0);
-  assert.equal(summary.remaining.ultraFree, 1);
-  assert.equal(summary.remaining.proCredits, 15);
+test("there are two tiers, and the retired middle tier maps to Premium", () => {
+  assert.equal(normalizeTier(1), 1);
+  assert.equal(normalizeTier(3), 3);
+  assert.equal(normalizeTier(2), 3);
+  assert.equal(normalizeTier("tier2"), 3);
+  assert.equal(normalizeTier(null), null);
+  assert.deepEqual(getEditingModelsForTier(2), getEditingModelsForTier(3));
+  assert.equal(getModelsForTier(2).tier, 3);
 });

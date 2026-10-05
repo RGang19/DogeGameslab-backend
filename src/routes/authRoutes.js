@@ -3,9 +3,11 @@ import { z } from "zod";
 import {
   createSignInChallenge,
   getAuthConfig,
+  readSignInChallenge,
   signToken,
   verifySignInSignature,
 } from "../services/authService.js";
+import { consumeSignInNonce } from "../services/signInNonceService.js";
 import { attributeNewUser, requestIp } from "../services/referralService.js";
 import { logActivityOnChain, ACTIVITY } from "../services/zeroGActivityLog.js";
 
@@ -61,6 +63,8 @@ authRouter.post("/token", async (request, response, next) => {
     const input = tokenSchema.parse(request.body ?? {});
     const identity = verifySignInSignature(input);
     const userId = identity.userId;
+    // Each signed challenge signs in once: a replayed message is rejected here.
+    await consumeSignInNonce({ ...readSignInChallenge(input.message), address: userId });
     // On-chain: log a login/session-start event (0G + DogeOS).
     logActivityOnChain(ACTIVITY.LOGIN, userId);
     await attributeNewUser({

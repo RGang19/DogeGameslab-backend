@@ -35,27 +35,15 @@ export function getZeroGConfig() {
 const TIER_DEFAULTS = {
   1: {
     general: "0GM-1.0-35B-A3B",
-    orchestrator: "glm-5",
-    coding: "gpt-5.6-terra",
-    repair: "gpt-5.6-sol",
+    orchestrator: "gpt-5.6-luna",
+    coding: "gpt-5.6-luna",
+    repair: "gpt-5.6-terra",
     background: "deepseek-v4-flash",
     image: "z-image-turbo",
     asset: "z-image-turbo",
     vision: "qwen/qwen3-vl-30b-a3b-instruct",
     speech: "openai/whisper-large-v3",
     strategy: "hybrid"
-  },
-  2: {
-    general: "MiniMax-M3",
-    orchestrator: "gpt-5.6-terra",
-    coding: "claude-opus-4-8",
-    repair: "gpt-5.6-sol",
-    background: "deepseek-v4-flash",
-    image: "z-image-turbo",
-    asset: "z-image-turbo",
-    vision: "qwen3.7-plus",
-    speech: "openai/whisper-large-v3",
-    strategy: "pure-agent"
   },
   3: {
     general: "MiniMax-M3",
@@ -71,19 +59,21 @@ const TIER_DEFAULTS = {
   }
 };
 
-// Accepts 1|2|3, "1"|"2"|"3", or "tier2" etc. Returns 1/2/3 or null when the
-// value is absent or invalid (caller then keeps the legacy unprefixed models).
+// Two tiers: 1 = Fast, 3 = Premium. Accepts 1|3, "1"|"3", or "tier3" etc. and
+// returns 1/3, or null when the value is absent or invalid. The retired middle
+// tier (2) maps to Premium, so a game built on it is edited with the Premium set.
 export function normalizeTier(value) {
   if (value === null || value === undefined || value === "") return null;
   const digits = String(value).match(/[123]/);
-  const tier = digits ? Number(digits[0]) : NaN;
+  if (!digits) return null;
+  const tier = Number(digits[0]) === 1 ? 1 : 3;
   return TIER_DEFAULTS[tier] ? tier : null;
 }
 
 // Resolves the seven model roles for a tier: env override first
 // (TIER{n}_CODING_MODEL, …), then the built-in default above.
 export function getModelsForTier(tier) {
-  const n = normalizeTier(tier) ?? 2;
+  const n = normalizeTier(tier) ?? INTERNAL_TIER;
   const d = TIER_DEFAULTS[n];
   const env = (suffix) => {
     const value = process.env[`TIER${n}_${suffix}`];
@@ -103,10 +93,10 @@ export function getModelsForTier(tier) {
   };
 }
 
-// Strategy is fixed per tier by design (Tier 1 = hybrid, Tier 2/3 = pure-agent)
+// Strategy is fixed per tier by design (Fast = hybrid, Premium = pure-agent)
 // but still overridable from .env via TIER{n}_STRATEGY.
 export function getTierStrategy(tier) {
-  const n = normalizeTier(tier) ?? 2;
+  const n = normalizeTier(tier) ?? INTERNAL_TIER;
   const override = process.env[`TIER${n}_STRATEGY`];
   const value = override && override.trim().toLowerCase();
   if (value === "hybrid" || value === "pure-agent") return value;
@@ -117,13 +107,23 @@ export function getTierStrategy(tier) {
 // EDITING MODELS — a fully separate, independent model set used only for
 // post-creation "wish" edits (baseCode present). Controlled from .env with
 // EDIT_TIER{n}_* variables, completely independent of the generation TIER{n}_*
-// set. Defaults: Tier 1 edits use the Tier 1 models; Tier 2 AND Tier 3 edits
-// use the Tier 2 models (edits are seed-edits, so the mid model is enough).
+// set. Defaults: Fast edits use the Fast models; Premium edits use a mid-priced
+// set (edits are seed-edits, so the top generation models are not needed).
 // ---------------------------------------------------------------------------
 const EDIT_TIER_DEFAULTS = {
   1: { ...TIER_DEFAULTS[1] },
-  2: { ...TIER_DEFAULTS[2] },
-  3: { ...TIER_DEFAULTS[2] }
+  3: {
+    general: "MiniMax-M3",
+    orchestrator: "gpt-5.6-terra",
+    coding: "claude-opus-4-8",
+    repair: "gpt-5.6-sol",
+    background: "deepseek-v4-flash",
+    image: "z-image-turbo",
+    asset: "z-image-turbo",
+    vision: "qwen3.7-plus",
+    speech: "openai/whisper-large-v3",
+    strategy: "pure-agent"
+  }
 };
 
 // Resolves the seven editing model roles for a tier: EDIT_TIER{n}_* env first,
@@ -413,6 +413,15 @@ async function readAnthropicStream(response, onChunk) {
   };
 }
 
+// Qwen and DeepSeek think by default and bill that hidden thinking as output
+// from the same max_tokens budget, which can leave no room for the code. They
+// accept `enable_thinking`; other OpenAI-format models reject unknown params,
+// so it is only sent to those two families, and only when thinking is "off".
+function openAiThinkingParams(model, thinking) {
+  if (thinking?.type !== "disabled") return {};
+  return /^(qwen|deepseek)/i.test(String(model || "")) ? { enable_thinking: false } : {};
+}
+
 export async function callZeroGChat({
   model,
   messages,
@@ -468,7 +477,7 @@ export async function callZeroGChat({
         body: JSON.stringify(
           anthropic
             ? toAnthropicBody({ model, messages, maxTokens, thinking })
-            : { model, messages, temperature, max_tokens: maxTokens, stream: true }
+            : { model, messages, temperature, max_tokens: maxTokens, stream: true, ...openAiThinkingParams(model, thinking) }
         )
       });
 
@@ -553,12 +562,16 @@ export async function runBackgroundTask({
   timeoutMs = 10 * 60 * 1000,
   retries = 0
 }) {
+  const model = models.background || models.general;
   return callZeroGChat({
-    model: models.background || models.general,
+    model,
     temperature: 0.2,
     maxTokens: 2000,
     timeoutMs,
     retries,
+    // Short structured output: hidden thinking would use up the 2000-token
+    // budget and cut the JSON off. Claude models keep their existing behaviour.
+    thinking: isAnthropicModel(model) ? undefined : { type: "disabled" },
     messages: [
       {
         role: "system",

@@ -22,8 +22,7 @@ import {
   notifyFollowersOfPublish
 } from "../services/socialService.js";
 import { assertGenerationAccess, generationAccessMetadata, fetchGenerationQuotaForAuth } from "../services/generationAccessService.js";
-import { consumeGenerationQuota } from "../services/generationQuotaService.js";
-import { recordPaymentReceipt, recordGenerationProvenance, recordPublishedSnapshot } from "../services/zeroGProvenanceService.js";
+import { recordGenerationProvenance, recordPublishedSnapshot } from "../services/zeroGProvenanceService.js";
 import { logActivityOnChain, ACTIVITY } from "../services/zeroGActivityLog.js";
 import { createGenerationLogger } from "../utils/generationLogger.js";
 import {
@@ -39,7 +38,6 @@ const createSchema = z.object({
   difficulty: z.enum(["easy", "normal", "hard", "insane"]).optional(),
   customization: z.enum(["light", "medium", "heavy"]).optional(),
   extra: z.enum(["none", "powerups", "leaderboard", "boss"]).optional(),
-  paymentTxHash: z.string().min(1).optional(),
   userId: z.string().optional()
 }).strict();
 
@@ -54,9 +52,8 @@ const promptGenerateSchema = z.object({
   includeCode: z.boolean().optional(),
   includeAssets: z.boolean().optional(),
   strategy: z.enum(["hybrid", "pure-agent"]).optional(),
-  tier: z.coerce.number().int().min(1).max(3),
-  paymentMethod: z.enum(["0g"]).optional(),
-  paymentTxHash: z.string().min(1).optional(),
+  // 1 = Fast, 3 = Premium. The retired middle tier (2) is not offered for new games.
+  tier: z.coerce.number().int().refine((value) => value === 1 || value === 3, "tier must be 1 (Fast) or 3 (Premium)"),
   userId: z.string().optional()
 }).strict();
 
@@ -153,10 +150,7 @@ export async function checkGenerationAccess(request, response, next) {
       creatorId,
       creatorAliases: authIdentityAliases(request.auth),
       evmWalletAddress: request.auth?.evmWalletAddress,
-      paymentTxHash: request.query.paymentTxHash,
-      paymentMethod: request.query.paymentMethod,
-      tier: request.query.tier,
-      auth: request.auth
+      tier: request.query.tier
     });
     response.json({
       ok: true,
@@ -172,8 +166,7 @@ export async function showGenerationQuota(request, response, next) {
     const creatorId = request.auth?.userId ?? "anonymous";
     const quota = await fetchGenerationQuotaForAuth({
       creatorId,
-      creatorAliases: authIdentityAliases(request.auth),
-      evmWalletAddress: request.auth?.evmWalletAddress
+      creatorAliases: authIdentityAliases(request.auth)
     });
     response.json({ ok: true, quota });
   } catch (error) {
@@ -434,13 +427,11 @@ export async function createGame(request, response, next) {
     const generationAccess = await assertGenerationAccess({
       creatorId,
       creatorAliases: authIdentityAliases(request.auth),
-      evmWalletAddress: request.auth?.evmWalletAddress,
-      paymentTxHash: input.paymentTxHash
+      evmWalletAddress: request.auth?.evmWalletAddress
     });
     const game = createGamePackage(input);
     game.creatorId = creatorId;
     game.generationAccess = generationAccessMetadata(generationAccess);
-    recordPaymentReceipt({ creatorId, gameId: game.id, tier: null, access: generationAccess });
     const persistence = await saveGamePackage(game);
     if (game.creatorId) {
       await logActivity({
@@ -472,24 +463,19 @@ export async function generateGame(request, response, next) {
       includeAssets: input.includeAssets ?? true,
       promptLength: input.prompt?.length ?? 0,
     });
-    // The tier (required — the user picks it in the UI) owns pricing AND the
-    // model/strategy set. The same value gates the price and drives generation,
-    // so what is charged always matches what is built. Client-sent model/strategy
-    // is never trusted.
+    // The tier (required — the user picks it in the UI) owns the free allowance
+    // AND the model/strategy set. The same value gates the allowance and drives
+    // generation. Client-sent model/strategy is never trusted.
     const tier = input.tier;
     logger.log("request.generation-access.start");
     const generationAccess = await assertGenerationAccess({
       creatorId,
       creatorAliases: authIdentityAliases(request.auth),
       evmWalletAddress: request.auth?.evmWalletAddress,
-      paymentTxHash: input.paymentTxHash,
-      paymentMethod: input.paymentMethod,
-      auth: request.auth,
       tier
     });
     logger.log("request.generation-access.done", {
-      free: generationAccess?.free ?? null,
-      method: generationAccess?.method ?? null,
+      unlimited: generationAccess?.unlimited ?? false,
     });
     const result = await generateGameFromPrompt({ ...input, tier, requestId });
     // Attribute the game to its creator so follows and profile stats are real.
@@ -500,19 +486,10 @@ export async function generateGame(request, response, next) {
       prompt: input.prompt
     };
     result.game.generationAccess = generationAccessMetadata(generationAccess);
-    if (generationAccess?.quotaCreditKey) {
-      await consumeGenerationQuota({
-        evmWalletAddress: request.auth?.evmWalletAddress,
-        creatorId,
-        creditKey: generationAccess.quotaCreditKey
-      });
-    }
-    // 0G provenance: how the game was made + a receipt if it was paid.
+    // 0G provenance: how the game was made.
     recordGenerationProvenance({ game: result.game });
-    recordPaymentReceipt({ creatorId, gameId: result.game.id, tier, access: generationAccess });
     // 0G on-chain activity events.
     logActivityOnChain(ACTIVITY.GAME_GENERATED, result.game.id);
-    if (generationAccess && !generationAccess.free) logActivityOnChain(ACTIVITY.PAYMENT, result.game.id);
     result.game.publish = {
       ...(result.game.publish ?? {}),
       published: false,

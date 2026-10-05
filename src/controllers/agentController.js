@@ -9,7 +9,7 @@ import { getJob, serializeJob, startJob } from "../services/jobService.js";
 import { generateAndStoreGameThumbnail } from "../services/thumbnailService.js";
 import { createRefinementBundle } from "../services/refinementService.js";
 import { assertGenerationAccess, assertEditAccess, generationAccessMetadata } from "../services/generationAccessService.js";
-import { recordPaymentReceipt, recordGameVersion, recordReferenceInput, recordVoiceInput } from "../services/zeroGProvenanceService.js";
+import { recordGameVersion, recordReferenceInput, recordVoiceInput } from "../services/zeroGProvenanceService.js";
 import { logActivityOnChain, ACTIVITY } from "../services/zeroGActivityLog.js";
 import { authIdentityAliases, authOwnsIdentity } from "../services/identityAliasService.js";
 import {
@@ -27,6 +27,7 @@ import {
   zeroGModels,
   callZeroGChat
 } from "../services/zeroGService.js";
+import { dogeHeroSpecRules, randomDogeTraits } from "../services/dogeHeroService.js";
 
 const orchestrationSchema = z.object({
   prompt: z.string().min(1),
@@ -46,8 +47,6 @@ const codeSchema = z.object({
   // build. Optional here because post-creation edits (baseCode) reuse the
   // internal default models instead.
   tier: z.coerce.number().int().min(1).max(3).optional(),
-  paymentMethod: z.enum(["0g"]).optional(),
-  paymentTxHash: z.string().min(1).optional(),
   // Current build source — when present, the agent edits this code instead of
   // generating from a template seed (post-creation "wish" edits).
   baseCode: z.string().optional()
@@ -116,6 +115,7 @@ function fallbackEnhancedPrompt(rawPrompt) {
         "Build a satisfying gameplay loop with gradual progression, fair challenge, readable objectives, stable performance, and explicit success, failure, restart, and pause states.",
         "Describe a specific environment and scenery that fit the requested genre, including foreground details, layered backgrounds, atmosphere, lighting, weather or ambient motion when appropriate.",
         "Define an original main character, recognizable obstacles, collectibles, enemies, and environmental props with a consistent premium art direction and color palette.",
+        `Unless the idea names a different character or has no main character (chess, match-3, quiz, card or puzzle games), the hero is a unique Doge — a Shiba Inu with the classic Doge face, its own name and look (${randomDogeTraits()}), dressed for this game's theme, with a small gold Ð detail.`,
         "Add satisfying particles, transitions, impact reactions, camera feedback, and readable interface elements without obscuring gameplay.",
         "Explain how the environment changes as difficulty progresses so later stages feel visually and mechanically richer.",
         "Keep every mechanic, environment, character, interface element, and generated asset consistent with the requested genre and theme."
@@ -195,6 +195,7 @@ export async function enhancePrompt(request, response, next) {
               "Describe suitable scenery and environment in concrete visual terms: foreground elements, layered background, atmosphere, lighting, environmental motion, obstacles, props, collectibles, character appearance, effects, and a consistent color palette.",
               "When the user references a famous game, preserve the gameplay inspiration but specify original characters, scenery, names, and artwork.",
               "Do not change the requested game into a different genre or reuse an unrelated template.",
+              dogeHeroSpecRules(),
               "Apart from the required Title heading, do not add headings, bullet points, commentary, quotation marks, or implementation code.",
               "Return only the enhanced prompt."
             ].join("\n")
@@ -244,9 +245,9 @@ export async function generateCode(request, response, next) {
     const existingGame = input.gamePackage?.id ? await getGamePackageById(input.gamePackage.id) : null;
 
     // A post-creation EDIT (baseCode present) uses the fully separate EDITING
-    // model set + EDITING pricing, keyed by the tier the game was generated at
-    // (stored on the package). A fresh BUILD uses the generation TIER{n}_* set +
-    // generation pricing, keyed by the tier the user picked.
+    // model set, keyed by the tier the game was generated at (stored on the
+    // package). A fresh BUILD uses the generation TIER{n}_* set, keyed by the
+    // tier the user picked, and counts against that tier's free allowance.
     const isEdit = Boolean(input.baseCode);
     let models;
     let strategy;
@@ -259,38 +260,22 @@ export async function generateCode(request, response, next) {
         creatorId,
         creatorAliases: authIdentityAliases(request.auth),
         evmWalletAddress: request.auth?.evmWalletAddress,
-        paymentTxHash: input.paymentTxHash,
-        paymentMethod: input.paymentMethod,
-        auth: request.auth,
         tier: editTier
       });
     } else {
       const tier = normalizeTier(input.tier);
       models = tier ? getModelsForTier(tier) : zeroGModels;
       strategy = tier ? getTierStrategy(tier) : input.strategy;
-      // New builds are charged once. If the game already exists (it was priced
-      // at the routing step), skip re-charging here.
+      // New builds are checked against the allowance once. If the game already
+      // exists (it was checked at the routing step), skip the check here.
       if (!existingGame) {
         generationAccess = await assertGenerationAccess({
           creatorId,
           creatorAliases: authIdentityAliases(request.auth),
           evmWalletAddress: request.auth?.evmWalletAddress,
-          paymentTxHash: input.paymentTxHash,
-          paymentMethod: input.paymentMethod,
-          auth: request.auth,
           tier
         });
       }
-    }
-    // 0G receipt for a paid build/edit (whitelisted/free requests record nothing).
-    if (generationAccess && !generationAccess.free) {
-      recordPaymentReceipt({
-        creatorId,
-        gameId: input.gamePackage?.id ?? null,
-        tier: isEdit ? (normalizeTier(input.tier ?? input.gamePackage?.generation?.qualityTier) ?? 1) : normalizeTier(input.tier),
-        access: generationAccess
-      });
-      logActivityOnChain(ACTIVITY.PAYMENT, input.gamePackage?.id ?? "generation");
     }
 
     // A tier click starts cover generation immediately, in parallel with code.

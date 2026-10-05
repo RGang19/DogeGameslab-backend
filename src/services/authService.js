@@ -117,6 +117,11 @@ export function createSignInChallenge({ address, domain }) {
   };
 }
 
+/** The nonce and expiry of a sign-in message (for single-use tracking). */
+export function readSignInChallenge(message) {
+  return { nonce: readField(message, "Nonce"), expiresAt: readField(message, "Expires At") };
+}
+
 /** Verifies a signed sign-in challenge and returns the wallet identity. */
 export function verifySignInSignature({ address, message, signature }) {
   const normalizedAddress = normalizeWalletAddress(address);

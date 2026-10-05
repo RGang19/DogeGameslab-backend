@@ -6,6 +6,7 @@ import { createOrchestrationPlan, generateImageAsset, runBackgroundTask, getMode
 import { generateGameplayAssets } from "./gameplayAssetService.js";
 import { getPlaytestConfig, runPlaytest } from "./playtestService.js";
 import { nanoid } from "nanoid";
+import { dogeHeroSpecRules } from "./dogeHeroService.js";
 
 const defaultOptions = {
   theme: null,
@@ -266,7 +267,11 @@ async function generateSpecsWithAgent(
   timeoutMs = 10 * 60 * 1000,
 ) {
   const result = await runBackgroundTask({
-    task: "Design complete custom browser game specifications from scratch based on the user prompt. Do NOT use templates. Decide the title, category, mechanic, controls, tuning (parameters object), mood, colors (array of hex colors), assets. Return ONLY a JSON object containing: title, category, mechanic, controls, tuning, mood, colors, assets.",
+    task: [
+      "Design complete custom browser game specifications from scratch based on the user prompt. Do NOT use templates. Decide the title, category, mechanic, controls, tuning (parameters object), mood, colors (array of hex colors), assets. Return ONLY a JSON object containing: title, category, mechanic, controls, tuning, mood, colors, assets.",
+      dogeHeroSpecRules(),
+      "When the hero is a Doge, describe that unique Doge (name, look, outfit, gear, Ð detail) inside `assets`.",
+    ].join("\n"),
     input: {
       prompt,
       context: context ?? null

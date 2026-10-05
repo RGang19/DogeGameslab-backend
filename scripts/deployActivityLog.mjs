@@ -41,7 +41,7 @@ console.log("compiled OK — abi written to contracts/DogeGameActivityLog.abi.js
 // 2) Deploy
 const rpc = network === "dogeos"
   ? process.env.DOGEOS_RPC_URL || "https://rpc.testnet.dogeos.com/"
-  : process.env.ZERO_G_STORAGE_EVM_RPC || process.env.ZERO_G_PAYMENT_RPC_URL || "https://evmrpc.0g.ai";
+  : process.env.ZERO_G_STORAGE_EVM_RPC || "https://evmrpc.0g.ai";
 const key = network === "dogeos"
   ? process.env.DOGEOS_ACTIVITY_PRIVATE_KEY || process.env.ZERO_G_STORAGE_PRIVATE_KEY || process.env.ZERO_G_PRIVATE_KEY
   : process.env.ZERO_G_STORAGE_PRIVATE_KEY || process.env.ZERO_G_PRIVATE_KEY;

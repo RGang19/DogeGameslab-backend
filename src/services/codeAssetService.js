@@ -1,5 +1,6 @@
 import sharp from "sharp";
 import { callZeroGChat, normalizeTier } from "./zeroGService.js";
+import { DOGECOIN_CODE_RULE } from "./dogeHeroService.js";
 
 // Code-drawn gameplay assets: instead of an image model, a strong LLM writes each
 // sprite as SVG. SVG is transparent by default, crisp, and keeps one consistent
@@ -174,6 +175,7 @@ export async function designAssetSet(game, config) {
           "Return ONLY a strictly valid JSON object, no commentary. Never put double quotes inside a string value (use single quotes instead), and no trailing commas:",
           '{"style":{"name":"short style name","palette":["#hex", "... 5-8 colors"],"outline":"outline rule, e.g. 5px rounded outline in #1d1b3a","shading":"shading rule, e.g. soft two-tone cel shading with a top-left highlight","notes":"proportions, mood, detail level"},"assets":[{"name":"player","kind":"character","description":"what it looks like","usage":"how the game uses it","width":256,"height":256,"facing":"right","basedOn":null,"parts":[]}]}',
           "Rules:",
+          `- ${DOGECOIN_CODE_RULE}`,
           `- At most ${config.maxAssets} assets${wantsCodeBackground ? " plus one environment background" : ""}. Only sprites this gameplay actually needs.`,
           '- The first asset MUST be "player" (the main playable character or the thing the player controls).',
           config.frames > 0
