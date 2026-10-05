@@ -12,8 +12,10 @@ import { fileURLToPath } from "node:url";
 const COVER_FONT_FILE = fileURLToPath(new URL("../../assets/fonts/LuckiestGuy-Regular.ttf", import.meta.url));
 
 const COLLECTION_NAME = "thumbnails";
-const THUMBNAIL_WIDTH = 384;
-const THUMBNAIL_HEIGHT = 576;
+// Covers are 4:3 landscape, the same shape as the picture area on a game card,
+// so the card shows the whole cover with nothing cropped.
+const THUMBNAIL_WIDTH = 640;
+const THUMBNAIL_HEIGHT = 480;
 
 export async function getThumbnailCollection() {
   const database = await getDatabase();
@@ -124,16 +126,16 @@ function fallbackGradient(seed) {
 async function renderFallbackCoverWebp(game) {
   const [c1, c2, bg] = fallbackGradient(game.id);
   const title = coverTitle(game.title);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${THUMBNAIL_WIDTH}" height="${THUMBNAIL_HEIGHT}" viewBox="0 0 384 576">
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${THUMBNAIL_WIDTH}" height="${THUMBNAIL_HEIGHT}" viewBox="0 0 640 480">
     <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="${c1}"/><stop offset="0.55" stop-color="${c2}"/><stop offset="1" stop-color="${bg}"/>
     </linearGradient></defs>
-    <rect width="384" height="576" fill="${bg}"/>
-    <rect x="14" y="14" width="356" height="548" rx="26" fill="url(#g)"/>
-    <circle cx="110" cy="180" r="90" fill="#ffffff" opacity="0.12"/>
-    <path d="M40 470 L150 250 L230 380 L290 270 L344 470 Z" fill="#000000" opacity="0.28"/>
-    <rect x="34" y="470" width="316" height="72" rx="16" fill="#000000" opacity="0.55"/>
-    <text x="192" y="516" text-anchor="middle" fill="#ffffff" font-family="Arial,Helvetica,sans-serif" font-size="30" font-weight="800">${title.replace(/[<&>]/g, "")}</text>
+    <rect width="640" height="480" fill="${bg}"/>
+    <rect x="14" y="14" width="612" height="452" rx="26" fill="url(#g)"/>
+    <circle cx="170" cy="170" r="100" fill="#ffffff" opacity="0.12"/>
+    <path d="M70 380 L250 180 L370 300 L470 200 L570 380 Z" fill="#000000" opacity="0.28"/>
+    <rect x="60" y="372" width="520" height="72" rx="16" fill="#000000" opacity="0.55"/>
+    <text x="320" y="420" text-anchor="middle" fill="#ffffff" font-family="Arial,Helvetica,sans-serif" font-size="34" font-weight="800">${title.replace(/[<&>]/g, "")}</text>
   </svg>`;
   return sharp(Buffer.from(svg)).webp({ quality: 90 }).toBuffer();
 }
@@ -176,7 +178,7 @@ function layoutCoverTitle(font, text, maxWidth, maxHeight) {
     }
     lines.push(current);
     const widest = Math.max(...lines.map((line) => widthAt(line, 100)));
-    const size = Math.min(64, (maxWidth / widest) * 100, maxHeight / (lines.length * 1.04));
+    const size = Math.min(72, (maxWidth / widest) * 100, maxHeight / (lines.length * 1.04));
     if (!best || size > best.size) best = { lines, size };
   }
   return best;
@@ -189,9 +191,10 @@ function layoutCoverTitle(font, text, maxWidth, maxHeight) {
 async function overlayCoverTitle(coverBuffer, title) {
   const font = loadCoverFont();
   const text = coverTitleText(title);
-  const marginX = 24;
-  const top = 30;
-  const { lines, size } = layoutCoverTitle(font, text, THUMBNAIL_WIDTH - marginX * 2, 168);
+  const marginX = 36;
+  // Starts below the card's category tag, which sits over the top-left corner.
+  const top = 76;
+  const { lines, size } = layoutCoverTitle(font, text, THUMBNAIL_WIDTH - marginX * 2, 150);
   const lineHeight = size * 1.04;
   const paths = lines
     .map((line, index) => {
@@ -242,10 +245,10 @@ function coverArtPrompt(game) {
     game.gameplay?.mechanic,
     game.visuals?.mood,
     (game.visuals?.colors ?? []).slice(0, 3).join(" "),
-    "polished colorful digital illustration, one clear main character in action in the lower two thirds",
-    "the top quarter of the picture is calm open sky or plain background",
+    "polished colorful digital illustration, one clear main character in action in the lower half",
+    "the top half of the picture is calm open sky or plain background",
     DOGECOIN_ART_RULE,
-    "pure artwork only: a clean picture with blank unmarked surfaces, vertical 2:3 portrait"
+    "pure artwork only: a clean picture with blank unmarked surfaces, wide 4:3 landscape"
   ].filter(Boolean).join(", ");
 }
 
@@ -291,7 +294,7 @@ export async function generateAndStoreGameThumbnail(game) {
 
   const prompt = coverArtPrompt(game);
 
-  // Request a native 2:3 portrait composition, then normalize the stored file
+  // Request a native 4:3 landscape composition, then normalize the stored file
   // to the exact dimensions used by mobile and tablet game cards. generateImageAsset
   // already has an internal timeout + retries; if the image model still can't
   // deliver, we render a real webp cover locally instead of throwing — so the
@@ -307,7 +310,7 @@ export async function generateAndStoreGameThumbnail(game) {
     for (let attempt = 1; attempt <= COVER_ART_ATTEMPTS; attempt += 1) {
       let generated;
       try {
-        generated = await generateImageAsset({ prompt, size: "1024x1536" });
+        generated = await generateImageAsset({ prompt, size: "1024x768" });
       } catch (error) {
         if (best) break;
         generated = await generateImageAsset({ prompt });

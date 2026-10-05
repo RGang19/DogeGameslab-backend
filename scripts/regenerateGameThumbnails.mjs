@@ -18,8 +18,8 @@ const games = await (await getGameCollection())
         generatedGameFilter,
         {
           $or: [
-            { thumbnailWidth: { $ne: 384 } },
-            { thumbnailHeight: { $ne: 576 } }
+            { thumbnailWidth: { $ne: 640 } },
+            { thumbnailHeight: { $ne: 480 } }
           ]
         }
       ]
@@ -29,7 +29,7 @@ const games = await (await getGameCollection())
   .sort({ createdAt: 1, id: 1 })
   .toArray();
 
-console.log(`Regenerating ${games.length} generated-game thumbnails at 384x576.`);
+console.log(`Regenerating ${games.length} generated-game thumbnails at 640x480 (4:3).`);
 console.log("Template-library thumbnails are excluded.");
 
 let completed = 0;
