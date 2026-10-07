@@ -230,11 +230,33 @@ async function overlayCoverTitle(coverBuffer, title) {
 // What the cover picture should show: a short scene description built from the
 // game, phrased positively. The title and words such as "cover" or "Ð" are left
 // out because they make image models paint lettering and coin symbols.
+// True when collecting coins is part of the game itself. Board and puzzle games
+// often mention a single "Ð coin" as a score icon or mascot detail; that does
+// not make coins part of the scene.
+export function gameHasCoins(game) {
+  const text = [game.generation?.prompt, game.prompt, game.customization?.prompt, game.gameplay?.mechanic]
+    .filter(Boolean)
+    .join(" ");
+  const coin = "(?:coins?|tokens?|treasure|loot|gold|gems?)";
+  const verb = "(?:collect\\w*|grab\\w*|gather\\w*|pick\\w* up|earn\\w*|scoop\\w*|chas\\w*)";
+  return new RegExp(`${verb}[^.]{0,60}${coin}|${coin}[^.]{0,40}(?:to|you) ${verb}`, "i").test(
+    text.replace(/Ð\s*/g, "")
+  );
+}
+
 function coverArtPrompt(game) {
-  const source = String(game.generation?.prompt || game.prompt || game.customization?.prompt || "")
-    .replace(/Ð\s*coins?/gi, "gold dog-face coins")
+  const coins = gameHasCoins(game);
+  const raw = String(game.generation?.prompt || game.prompt || game.customization?.prompt || "");
+  const source = (coins
+    ? raw
+        .replace(/Ð\s*coins?/gi, "gold dog-face coins")
+        .replace(/\b(dogecoin|bitcoin|crypto\w*)\b/gi, "gold coin")
+    // Not a coin game: leave coins out of the picture entirely. Even a "no
+    // coins" instruction makes image models draw them, so they are just removed.
+    : raw
+        .replace(/[^.,;]*\b(Ð\s*coins?|coins?|dogecoin|bitcoin|crypto\w*|tokens?)\b[^.,;]*/gi, " ")
+  )
     .replace(/[Ð₿$]/g, "")
-    .replace(/\b(dogecoin|bitcoin|crypto\w*)\b/gi, "gold coin")
     .replace(/\b(HUD|UI|button\w*|menu\w*|score\w*|title\w*|text|label\w*|swipe\w*|tap\w*|arrow keys?)\b/gi, "")
     .replace(/\s+/g, " ")
     .trim()
@@ -247,16 +269,16 @@ function coverArtPrompt(game) {
     (game.visuals?.colors ?? []).slice(0, 3).join(" "),
     "polished colorful digital illustration, one clear main character in action in the lower half",
     "the top half of the picture is calm open sky or plain background",
-    DOGECOIN_ART_RULE,
+    coins ? DOGECOIN_ART_RULE : null,
     "pure artwork only: a clean picture with blank unmarked surfaces, wide 4:3 landscape"
   ].filter(Boolean).join(", ");
 }
 
 // Asks the vision model whether the art came out clean. Image models sometimes
 // paint lettering, a Bitcoin symbol or interface buttons no matter the prompt;
-// a flagged picture is regenerated. Returns the number of problems (0 = clean),
-// or 0 when the check itself can't run, so a cover is never blocked by it.
-async function countCoverArtProblems(webpBuffer) {
+// a flagged picture is regenerated. Returns what it saw, or null when the check
+// itself can't run, so a cover is never blocked by it.
+export async function inspectCoverArt(webpBuffer) {
   try {
     const response = await callZeroGChat({
       model: getModelsForTier(1).vision,
@@ -280,11 +302,20 @@ async function countCoverArtProblems(webpBuffer) {
     const hasWriting = String(seen.words ?? "").replace(/[^\p{L}\p{N}]/gu, "").length >= 2;
     const wrongCoin = /\bB\b|bitcoin|₿|dollar|\$|ethereum|\bbtc\b/i.test(String(seen.coin_symbols ?? ""));
     const hasInterface = !/^\s*(none|no|n\/a)?\s*$/i.test(String(seen.interface ?? ""));
-    return [hasWriting, wrongCoin, hasInterface].filter(Boolean).length;
+    const hasCoins = !/^\s*(none|no|n\/a|no coins)?\s*$/i.test(String(seen.coin_symbols ?? ""));
+    return { hasWriting, wrongCoin, hasInterface, hasCoins };
   } catch (error) {
     console.warn("Cover art check skipped", { message: error.message });
-    return 0;
+    return null;
   }
+}
+
+// Number of problems in freshly generated art (0 = clean). Coins count as a
+// problem when the game has none.
+async function countCoverArtProblems(webpBuffer, { allowCoins }) {
+  const seen = await inspectCoverArt(webpBuffer);
+  if (!seen) return 0;
+  return [seen.hasWriting, seen.wrongCoin, seen.hasInterface, !allowCoins && seen.hasCoins].filter(Boolean).length;
 }
 
 const COVER_ART_ATTEMPTS = Math.max(1, Number(process.env.COVER_ART_ATTEMPTS) || 3);
@@ -328,7 +359,7 @@ export async function generateAndStoreGameThumbnail(game) {
         .resize(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, { fit: "cover", position: "centre" })
         .webp({ quality: 88 })
         .toBuffer();
-      const problems = await countCoverArtProblems(art);
+      const problems = await countCoverArtProblems(art, { allowCoins: gameHasCoins(game) });
       if (!best || problems < best.problems) best = { art, problems, generated };
       if (problems === 0) break;
       console.warn("Cover art had unwanted content; regenerating", { gameId: game.id, attempt, problems });
